@@ -21,3 +21,24 @@ test('mounts as express middleware and serves health payload', async () => {
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test('serves foundation metadata at the root route', async () => {
+  const app = express();
+  const server = app.use('/grants', grantFoundation({ root: '/grants' })).listen(0);
+  const { port } = server.address();
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/grants`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      ok: true,
+      name: 'grant-foundation',
+      root: '/grants',
+      endpoints: {
+        health: '/grants/health'
+      }
+    });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

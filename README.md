@@ -14,3 +14,20 @@ app.use(grantFoundation({ root: '/grants' }));
 
 app.listen(3000);
 ```
+
+## Local run
+
+```bash
+npm start
+```
+
+## Vercel launch
+
+This repository includes a Vercel-ready server entrypoint at `api/index.js` and
+deployment rules in `vercel.json`.
+
+Deploy with:
+
+```bash
+vercel --prod
+```
