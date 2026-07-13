@@ -1,0 +1,16 @@
+{
+  "name": "grant-foundation",
+  "version": "0.1.0",
+  "description": "A tiny Express foundation inspired by Gandhi",
+  "main": "index.js",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^5.2.1"
+  }
+}
