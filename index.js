@@ -2,6 +2,7 @@ const express = require('express');
 const fs = require('node:fs');
 const path = require('node:path');
 const Database = require('better-sqlite3');
+const { rateLimit } = require('express-rate-limit');
 
 const WORKFLOWS = ['intake', 'review', 'approval', 'contracting', 'disbursement', 'reporting', 'closeout'];
 const ROLES = ['applicant', 'reviewer', 'program_officer', 'finance', 'admin'];
@@ -129,6 +130,12 @@ module.exports = function createGrantFoundation(config = {}) {
   initializeDatabase(db);
 
   router.use(express.json());
+  router.use(rateLimit({
+    windowMs: Number(config.rateLimitWindowMs) || 60_000,
+    limit: Number(config.rateLimitLimit) || 120,
+    standardHeaders: true,
+    legacyHeaders: false
+  }));
 
   const writeAudit = db.prepare(`
     INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, metadata, created_at)
