@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Grant Foundation UI</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; background: #f6f8fb; }
+    h1, h2 { margin-bottom: 8px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+    .card { background: #fff; border-radius: 8px; padding: 12px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+    label { display: block; font-size: 12px; margin: 8px 0 4px; color: #394150; }
+    input, select, textarea, button { width: 100%; padding: 8px; box-sizing: border-box; }
+    button { background: #1459d9; border: none; color: #fff; margin-top: 8px; cursor: pointer; }
+    button:hover { background: #1048b0; }
+    pre { background: #0f172a; color: #f8fafc; padding: 8px; border-radius: 6px; overflow-x: auto; }
+    ul { margin: 0; padding-left: 18px; }
+    .hint { font-size: 12px; color: #5a6576; }
+  </style>
+</head>
+<body>
+  <h1>Grant Foundation MVP</h1>
+  <p class="hint">Role-based demo UI for intake, review, approval, and payment tracking.</p>
+
+  <div class="card">
+    <label for="userSelect">Active user</label>
+    <select id="userSelect"></select>
+    <button id="refreshBtn" type="button">Refresh dashboard and lists</button>
+  </div>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Dashboard</h2>
+      <pre id="dashboardOutput">Select a user to load dashboard metrics.</pre>
+    </section>
+
+    <section class="card">
+      <h2>Create grant (Program Officer/Admin)</h2>
+      <label for="grantTitle">Title</label>
+      <input id="grantTitle" placeholder="New grant title">
+      <label for="grantOrg">Organization</label>
+      <input id="grantOrg" placeholder="Organization name">
+      <label for="grantDescription">Description</label>
+      <textarea id="grantDescription" rows="3" placeholder="Description"></textarea>
+      <button id="createGrantBtn" type="button">Create grant</button>
+    </section>
+
+    <section class="card">
+      <h2>Submit application (Applicant)</h2>
+      <label for="applicationGrantId">Grant ID</label>
+      <input id="applicationGrantId" type="number" min="1" placeholder="1">
+      <label for="applicationSummary">Summary</label>
+      <textarea id="applicationSummary" rows="3" placeholder="Why this project should be funded"></textarea>
+      <button id="submitApplicationBtn" type="button">Submit application</button>
+    </section>
+
+    <section class="card">
+      <h2>Add review (Reviewer)</h2>
+      <label for="reviewApplicationId">Application ID</label>
+      <input id="reviewApplicationId" type="number" min="1">
+      <label for="reviewScore">Score (1-10)</label>
+      <input id="reviewScore" type="number" min="1" max="10">
+      <label for="reviewNotes">Notes</label>
+      <textarea id="reviewNotes" rows="3"></textarea>
+      <button id="submitReviewBtn" type="button">Submit review</button>
+    </section>
+
+    <section class="card">
+      <h2>Record decision (Program Officer/Admin)</h2>
+      <label for="decisionApplicationId">Application ID</label>
+      <input id="decisionApplicationId" type="number" min="1">
+      <label for="decisionValue">Decision</label>
+      <select id="decisionValue">
+        <option value="approved">Approved</option>
+        <option value="rejected">Rejected</option>
+      </select>
+      <label for="decisionNotes">Notes</label>
+      <textarea id="decisionNotes" rows="3"></textarea>
+      <button id="submitDecisionBtn" type="button">Submit decision</button>
+    </section>
+
+    <section class="card">
+      <h2>Record payment (Finance/Admin)</h2>
+      <label for="paymentApplicationId">Application ID</label>
+      <input id="paymentApplicationId" type="number" min="1">
+      <label for="paymentAmount">Amount</label>
+      <input id="paymentAmount" type="number" min="1" step="0.01">
+      <button id="submitPaymentBtn" type="button">Record payment</button>
+    </section>
+  </div>
+
+  <div class="grid" style="margin-top: 16px;">
+    <section class="card">
+      <h2>Grants</h2>
+      <ul id="grantList"></ul>
+    </section>
+    <section class="card">
+      <h2>Applications</h2>
+      <label for="applicationStatusFilter">Status filter</label>
+      <select id="applicationStatusFilter">
+        <option value="">All</option>
+        <option value="submitted">submitted</option>
+        <option value="under_review">under_review</option>
+        <option value="approved">approved</option>
+        <option value="rejected">rejected</option>
+      </select>
+      <label for="applicationSearch">Search summary</label>
+      <input id="applicationSearch" placeholder="keyword">
+      <button id="filterApplicationsBtn" type="button">Apply filters</button>
+      <ul id="applicationList"></ul>
+    </section>
+    <section class="card">
+      <h2>Audit logs (Admin)</h2>
+      <button id="loadAuditBtn" type="button">Load audit logs</button>
+      <pre id="auditOutput">Only visible for admin.</pre>
+    </section>
+  </div>
+
+  <script>
+    const basePath = window.location.pathname.replace(/\/ui$/, '');
+    const userSelect = document.getElementById('userSelect');
+    const dashboardOutput = document.getElementById('dashboardOutput');
+    const grantList = document.getElementById('grantList');
+    const applicationList = document.getElementById('applicationList');
+    const auditOutput = document.getElementById('auditOutput');
+
+    function activeUserId() {
+      return userSelect.value;
+    }
+
+    async function api(path, options = {}) {
+      const headers = new Headers(options.headers || {});
+      if (activeUserId()) headers.set('x-user-id', activeUserId());
+      if (options.body && !headers.get('content-type')) headers.set('content-type', 'application/json');
+      const response = await fetch(`${basePath}${path}`, { ...options, headers });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Request failed');
+      return payload;
+    }
+
+    function listInto(target, items, formatter) {
+      target.innerHTML = '';
+      for (const item of items) {
+        const li = document.createElement('li');
+        li.textContent = formatter(item);
+        target.appendChild(li);
+      }
+    }
+
+    async function loadUsers() {
+      const { users } = await api('/users');
+      userSelect.innerHTML = '';
+      for (const user of users) {
+        const option = document.createElement('option');
+        option.value = user.id;
+        option.textContent = `${user.name} (${user.role})`;
+        userSelect.appendChild(option);
+      }
+    }
+
+    async function refreshDashboardAndLists() {
+      const [dashboard, grants, applications] = await Promise.all([
+        api('/dashboard'),
+        api('/grants'),
+        loadApplications()
+      ]);
+      dashboardOutput.textContent = JSON.stringify(dashboard.metrics, null, 2);
+      listInto(grantList, grants.grants, (g) => `#${g.id} ${g.title} [${g.status}] — ${g.organization}`);
+      if (!applications.length) applicationList.innerHTML = '<li>No applications found</li>';
+    }
+
+    async function loadApplications() {
+      const status = document.getElementById('applicationStatusFilter').value;
+      const q = document.getElementById('applicationSearch').value.trim();
+      const query = new URLSearchParams();
+      if (status) query.set('status', status);
+      if (q) query.set('q', q);
+      const suffix = query.toString() ? `?${query.toString()}` : '';
+      const payload = await api(`/applications${suffix}`);
+      listInto(applicationList, payload.applications, (a) => `#${a.id} [${a.status}] ${a.grantTitle} — ${a.summary}`);
+      return payload.applications;
+    }
+
+    async function runAndRefresh(fn) {
+      try {
+        await fn();
+        await refreshDashboardAndLists();
+      } catch (error) {
+        alert(error.message);
+      }
+    }
+
+    document.getElementById('refreshBtn').addEventListener('click', () => runAndRefresh(async () => {}));
+    document.getElementById('filterApplicationsBtn').addEventListener('click', () => runAndRefresh(loadApplications));
+
+    document.getElementById('createGrantBtn').addEventListener('click', () => runAndRefresh(async () => {
+      await api('/grants', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: document.getElementById('grantTitle').value,
+          organization: document.getElementById('grantOrg').value,
+          description: document.getElementById('grantDescription').value
+        })
+      });
+    }));
+
+    document.getElementById('submitApplicationBtn').addEventListener('click', () => runAndRefresh(async () => {
+      await api('/applications', {
+        method: 'POST',
+        body: JSON.stringify({
+          grantId: Number(document.getElementById('applicationGrantId').value),
+          summary: document.getElementById('applicationSummary').value
+        })
+      });
+    }));
+
+    document.getElementById('submitReviewBtn').addEventListener('click', () => runAndRefresh(async () => {
+      const applicationId = Number(document.getElementById('reviewApplicationId').value);
+      await api(`/applications/${applicationId}/reviews`, {
+        method: 'POST',
+        body: JSON.stringify({
+          score: Number(document.getElementById('reviewScore').value),
+          notes: document.getElementById('reviewNotes').value
+        })
+      });
+    }));
+
+    document.getElementById('submitDecisionBtn').addEventListener('click', () => runAndRefresh(async () => {
+      const applicationId = Number(document.getElementById('decisionApplicationId').value);
+      await api(`/applications/${applicationId}/decision`, {
+        method: 'POST',
+        body: JSON.stringify({
+          decision: document.getElementById('decisionValue').value,
+          notes: document.getElementById('decisionNotes').value
+        })
+      });
+    }));
+
+    document.getElementById('submitPaymentBtn').addEventListener('click', () => runAndRefresh(async () => {
+      const applicationId = Number(document.getElementById('paymentApplicationId').value);
+      await api(`/applications/${applicationId}/payments`, {
+        method: 'POST',
+        body: JSON.stringify({
+          amount: Number(document.getElementById('paymentAmount').value)
+        })
+      });
+    }));
+
+    document.getElementById('loadAuditBtn').addEventListener('click', async () => {
+      try {
+        const payload = await api('/audit-logs');
+        auditOutput.textContent = JSON.stringify(payload.logs, null, 2);
+      } catch (error) {
+        auditOutput.textContent = error.message;
+      }
+    });
+
+    loadUsers()
+      .then(refreshDashboardAndLists)
+      .catch((error) => {
+        dashboardOutput.textContent = error.message;
+      });
+  </script>
+</body>
+</html>
