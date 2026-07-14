@@ -16,6 +16,7 @@ function createApp() {
   const app = express();
   const root = '/grants';
 
+  app.set('trust proxy', 1);
   app.use(root, grantFoundation({ root, dbPath: defaultDatabasePath() }));
 
   app.get('/', (_req, res) => {

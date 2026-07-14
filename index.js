@@ -2,7 +2,7 @@ const express = require('express');
 const fs = require('node:fs');
 const path = require('node:path');
 const Database = require('better-sqlite3');
-const { rateLimit } = require('express-rate-limit');
+const { ipKeyGenerator, rateLimit } = require('express-rate-limit');
 
 const WORKFLOWS = ['intake', 'review', 'approval', 'contracting', 'disbursement', 'reporting', 'closeout'];
 const ROLES = ['applicant', 'reviewer', 'program_officer', 'finance', 'admin'];
@@ -138,6 +138,14 @@ function cleanText(value, fieldName, { maxLength = MAX_TEXT_LENGTH } = {}) {
   return { value: text };
 }
 
+function rateLimitKeyGenerator(req) {
+  const forwardedFor = req.get('x-forwarded-for');
+  const clientIp = forwardedFor
+    ? forwardedFor.split(',')[0].trim()
+    : req.ip || req.socket?.remoteAddress || 'unknown';
+  return ipKeyGenerator(clientIp);
+}
+
 module.exports = function createGrantFoundation(config = {}) {
   const router = express.Router();
   const root = config.root || '';
@@ -150,6 +158,7 @@ module.exports = function createGrantFoundation(config = {}) {
   router.use(rateLimit({
     windowMs: Number(config.rateLimitWindowMs) || 60_000,
     limit: Number(config.rateLimitLimit) || 120,
+    keyGenerator: config.rateLimitKeyGenerator || rateLimitKeyGenerator,
     standardHeaders: true,
     legacyHeaders: false
   }));
