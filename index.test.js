@@ -4,6 +4,23 @@ const express = require('express');
 
 const grantFoundation = require('./index');
 
+function listenWithGrants() {
+  const app = express();
+  const server = app.use('/grants', grantFoundation({ root: '/grants', dbPath: ':memory:' })).listen(0);
+  const { port } = server.address();
+  const request = (pathname, options = {}) => fetch(`http://127.0.0.1:${port}${pathname}`, options);
+  const requestAs = (userId, pathname, options = {}) => request(pathname, {
+    ...options,
+    headers: {
+      'content-type': 'application/json',
+      'x-user-id': userId,
+      ...(options.headers || {})
+    }
+  });
+
+  return { server, request, requestAs };
+}
+
 test('mounts as express middleware and serves health payload', async () => {
   const app = express();
   const server = app.use('/grants', grantFoundation({ root: '/grants' })).listen(0);
@@ -44,19 +61,7 @@ test('serves foundation metadata at the root route', async () => {
 });
 
 test('supports intake, review, decision, and payment workflow with role checks', async () => {
-  const app = express();
-  const server = app.use('/grants', grantFoundation({ root: '/grants', dbPath: ':memory:' })).listen(0);
-  const { port } = server.address();
-  const url = (pathname) => `http://127.0.0.1:${port}${pathname}`;
-  const request = (pathname, options = {}) => fetch(url(pathname), options);
-  const requestAs = (userId, pathname, options = {}) => request(pathname, {
-    ...options,
-    headers: {
-      'content-type': 'application/json',
-      'x-user-id': userId,
-      ...(options.headers || {})
-    }
-  });
+  const { server, requestAs } = listenWithGrants();
 
   try {
     const createGrantResponse = await requestAs('officer-1', '/grants/grants', {
@@ -129,17 +134,11 @@ test('supports intake, review, decision, and payment workflow with role checks',
 });
 
 test('rejects unauthorized creation attempts', async () => {
-  const app = express();
-  const server = app.use('/grants', grantFoundation({ root: '/grants', dbPath: ':memory:' })).listen(0);
-  const { port } = server.address();
+  const { server, requestAs } = listenWithGrants();
 
   try {
-    const response = await fetch(`http://127.0.0.1:${port}/grants/grants`, {
+    const response = await requestAs('applicant-1', '/grants/grants', {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-user-id': 'applicant-1'
-      },
       body: JSON.stringify({
         title: 'Invalid attempt',
         description: 'Should fail',
@@ -151,6 +150,53 @@ test('rejects unauthorized creation attempts', async () => {
     assert.deepEqual(await response.json(), {
       ok: false,
       error: 'Insufficient permissions'
+    });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('rejects whitespace-only grant and application fields', async () => {
+  const { server, requestAs } = listenWithGrants();
+
+  try {
+    const grantResponse = await requestAs('officer-1', '/grants/grants', {
+      method: 'POST',
+      body: JSON.stringify({
+        title: '   ',
+        description: 'Useful work',
+        organization: 'Civic Ed Network'
+      })
+    });
+    assert.equal(grantResponse.status, 400);
+    assert.deepEqual(await grantResponse.json(), {
+      ok: false,
+      error: 'title is required'
+    });
+
+    const applicationResponse = await requestAs('applicant-1', '/grants/applications', {
+      method: 'POST',
+      body: JSON.stringify({ grantId: 1, summary: '  ' })
+    });
+    assert.equal(applicationResponse.status, 400);
+    assert.deepEqual(await applicationResponse.json(), {
+      ok: false,
+      error: 'summary is required'
+    });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('rejects invalid application status filters', async () => {
+  const { server, requestAs } = listenWithGrants();
+
+  try {
+    const response = await requestAs('admin-1', '/grants/applications?status=not-real');
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), {
+      ok: false,
+      error: 'status must be one of: submitted, under_review, approved, rejected'
     });
   } finally {
     await new Promise((resolve) => server.close(resolve));

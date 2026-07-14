@@ -1,9 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const app = require('./index');
+const { createApp, defaultDatabasePath } = require('./index');
 
 test('api entrypoint exposes service and grant routes', async () => {
   process.env.GRANT_DB_PATH = ':memory:';
+  const app = createApp();
   const server = app.listen(0);
   const { port } = server.address();
 
@@ -33,5 +34,27 @@ test('api entrypoint exposes service and grant routes', async () => {
   } finally {
     await new Promise((resolve) => server.close(resolve));
     delete process.env.GRANT_DB_PATH;
+  }
+});
+
+test('uses Vercel-writable temp storage by default in serverless runtime', () => {
+  const originalVercel = process.env.VERCEL;
+  const originalDbPath = process.env.GRANT_DB_PATH;
+
+  try {
+    delete process.env.GRANT_DB_PATH;
+    process.env.VERCEL = '1';
+    assert.equal(defaultDatabasePath(), '/tmp/grant-foundation.db');
+  } finally {
+    if (originalVercel === undefined) {
+      delete process.env.VERCEL;
+    } else {
+      process.env.VERCEL = originalVercel;
+    }
+    if (originalDbPath === undefined) {
+      delete process.env.GRANT_DB_PATH;
+    } else {
+      process.env.GRANT_DB_PATH = originalDbPath;
+    }
   }
 });

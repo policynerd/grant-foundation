@@ -8,6 +8,7 @@ const WORKFLOWS = ['intake', 'review', 'approval', 'contracting', 'disbursement'
 const ROLES = ['applicant', 'reviewer', 'program_officer', 'finance', 'admin'];
 const GRANT_STATUSES = ['draft', 'open', 'closed'];
 const APPLICATION_STATUSES = ['submitted', 'under_review', 'approved', 'rejected'];
+const MAX_TEXT_LENGTH = 5_000;
 
 const DEFAULT_USERS = [
   { id: 'applicant-1', name: 'Ari Applicant', role: 'applicant' },
@@ -18,12 +19,14 @@ const DEFAULT_USERS = [
 ];
 
 function initializeDatabase(db) {
-  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
+  const journalMode = db.name === ':memory:' ? 'MEMORY' : 'WAL';
+  db.pragma(`journal_mode = ${journalMode}`);
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
-      role TEXT NOT NULL
+      role TEXT NOT NULL CHECK (role IN ('applicant', 'reviewer', 'program_officer', 'finance', 'admin'))
     );
 
     CREATE TABLE IF NOT EXISTS organizations (
@@ -36,7 +39,7 @@ function initializeDatabase(db) {
       title TEXT NOT NULL,
       description TEXT NOT NULL,
       organization_id INTEGER NOT NULL REFERENCES organizations(id),
-      status TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('draft', 'open', 'closed')),
       created_at TEXT NOT NULL
     );
 
@@ -45,7 +48,7 @@ function initializeDatabase(db) {
       grant_id INTEGER NOT NULL REFERENCES grants(id),
       applicant_user_id TEXT NOT NULL REFERENCES users(id),
       summary TEXT NOT NULL,
-      status TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('submitted', 'under_review', 'approved', 'rejected')),
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -54,7 +57,7 @@ function initializeDatabase(db) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       application_id INTEGER NOT NULL REFERENCES applications(id),
       reviewer_user_id TEXT NOT NULL REFERENCES users(id),
-      score INTEGER NOT NULL,
+      score INTEGER NOT NULL CHECK (score >= 1 AND score <= 10),
       notes TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
@@ -63,7 +66,7 @@ function initializeDatabase(db) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       application_id INTEGER NOT NULL REFERENCES applications(id),
       decider_user_id TEXT NOT NULL REFERENCES users(id),
-      decision TEXT NOT NULL,
+      decision TEXT NOT NULL CHECK (decision IN ('approved', 'rejected')),
       notes TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
@@ -71,7 +74,7 @@ function initializeDatabase(db) {
     CREATE TABLE IF NOT EXISTS payments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       application_id INTEGER NOT NULL REFERENCES applications(id),
-      amount REAL NOT NULL,
+      amount REAL NOT NULL CHECK (amount > 0),
       status TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
@@ -121,6 +124,20 @@ function readUiTemplate() {
   return fs.readFileSync(path.join(__dirname, 'public', 'app.html'), 'utf8');
 }
 
+function cleanText(value, fieldName, { maxLength = MAX_TEXT_LENGTH } = {}) {
+  if (typeof value !== 'string') {
+    return { error: `${fieldName} is required` };
+  }
+  const text = value.trim();
+  if (!text) {
+    return { error: `${fieldName} is required` };
+  }
+  if (text.length > maxLength) {
+    return { error: `${fieldName} must be ${maxLength} characters or fewer` };
+  }
+  return { value: text };
+}
+
 module.exports = function createGrantFoundation(config = {}) {
   const router = express.Router();
   const root = config.root || '';
@@ -129,7 +146,7 @@ module.exports = function createGrantFoundation(config = {}) {
   const db = config.db || new Database(dbPath);
   initializeDatabase(db);
 
-  router.use(express.json());
+  router.use(express.json({ limit: config.jsonLimit || '64kb' }));
   router.use(rateLimit({
     windowMs: Number(config.rateLimitWindowMs) || 60_000,
     limit: Number(config.rateLimitLimit) || 120,
@@ -210,7 +227,9 @@ module.exports = function createGrantFoundation(config = {}) {
     res.json({
       ok: true,
       workflows: WORKFLOWS,
-      roles: ROLES
+      roles: ROLES,
+      applicationStatuses: APPLICATION_STATUSES,
+      grantStatuses: GRANT_STATUSES
     });
   });
 
@@ -253,9 +272,12 @@ module.exports = function createGrantFoundation(config = {}) {
   });
 
   router.post('/grants', requireRole(['program_officer', 'admin']), (req, res) => {
-    const { title, description, organization } = req.body || {};
-    if (!title || !description || !organization) {
-      return res.status(400).json({ ok: false, error: 'title, description, and organization are required' });
+    const title = cleanText(req.body?.title, 'title', { maxLength: 200 });
+    const description = cleanText(req.body?.description, 'description');
+    const organization = cleanText(req.body?.organization, 'organization', { maxLength: 200 });
+    const validationError = title.error || description.error || organization.error;
+    if (validationError) {
+      return res.status(400).json({ ok: false, error: validationError });
     }
 
     const now = toIsoNow();
@@ -264,22 +286,22 @@ module.exports = function createGrantFoundation(config = {}) {
       ON CONFLICT(name) DO UPDATE SET name = excluded.name
       RETURNING id
     `);
-    const org = upsertOrganization.get(organization.trim());
+    const org = upsertOrganization.get(organization.value);
 
     const insertGrant = db.prepare(`
       INSERT INTO grants (title, description, organization_id, status, created_at)
       VALUES (?, ?, ?, ?, ?)
     `);
-    const result = insertGrant.run(title.trim(), description.trim(), org.id, 'draft', now);
-    audit(req.user.id, 'grant.created', 'grant', result.lastInsertRowid, { title });
+    const result = insertGrant.run(title.value, description.value, org.id, 'draft', now);
+    audit(req.user.id, 'grant.created', 'grant', result.lastInsertRowid, { title: title.value });
 
     return res.status(201).json({
       ok: true,
       grant: {
         id: result.lastInsertRowid,
-        title: title.trim(),
-        description: description.trim(),
-        organization: organization.trim(),
+        title: title.value,
+        description: description.value,
+        organization: organization.value,
         status: 'draft',
         createdAt: now
       }
@@ -316,13 +338,16 @@ module.exports = function createGrantFoundation(config = {}) {
     }
 
     if (req.query.status) {
+      if (!APPLICATION_STATUSES.includes(req.query.status)) {
+        return res.status(400).json({ ok: false, error: `status must be one of: ${APPLICATION_STATUSES.join(', ')}` });
+      }
       queryParts.push('a.status = ?');
       params.push(req.query.status);
     }
 
     if (req.query.q) {
       queryParts.push('a.summary LIKE ?');
-      params.push(`%${req.query.q}%`);
+      params.push(`%${String(req.query.q).trim().slice(0, 200)}%`);
     }
 
     const whereClause = queryParts.length > 0 ? `WHERE ${queryParts.join(' AND ')}` : '';
@@ -348,10 +373,10 @@ module.exports = function createGrantFoundation(config = {}) {
   });
 
   router.post('/applications', requireRole(['applicant']), (req, res) => {
-    const { grantId, summary } = req.body || {};
-    const parsedGrantId = Number(grantId);
-    if (!Number.isInteger(parsedGrantId) || parsedGrantId < 1 || !summary) {
-      return res.status(400).json({ ok: false, error: 'grantId and summary are required' });
+    const parsedGrantId = Number(req.body?.grantId);
+    const summary = cleanText(req.body?.summary, 'summary');
+    if (!Number.isInteger(parsedGrantId) || parsedGrantId < 1 || summary.error) {
+      return res.status(400).json({ ok: false, error: summary.error || 'grantId is required' });
     }
 
     const grant = db.prepare('SELECT id, status FROM grants WHERE id = ?').get(parsedGrantId);
@@ -366,7 +391,7 @@ module.exports = function createGrantFoundation(config = {}) {
     const result = db.prepare(`
       INSERT INTO applications (grant_id, applicant_user_id, summary, status, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).run(parsedGrantId, req.user.id, summary.trim(), 'submitted', now, now);
+    `).run(parsedGrantId, req.user.id, summary.value, 'submitted', now, now);
 
     audit(req.user.id, 'application.submitted', 'application', result.lastInsertRowid, { grantId: parsedGrantId });
     return res.status(201).json({
@@ -375,7 +400,7 @@ module.exports = function createGrantFoundation(config = {}) {
         id: result.lastInsertRowid,
         grantId: parsedGrantId,
         applicantUserId: req.user.id,
-        summary: summary.trim(),
+        summary: summary.value,
         status: 'submitted',
         createdAt: now
       }
@@ -385,13 +410,13 @@ module.exports = function createGrantFoundation(config = {}) {
   router.post('/applications/:applicationId/reviews', requireRole(['reviewer']), (req, res) => {
     const applicationId = Number(req.params.applicationId);
     const score = Number(req.body?.score);
-    const notes = req.body?.notes;
+    const notes = cleanText(req.body?.notes, 'notes');
 
     if (!Number.isInteger(applicationId) || applicationId < 1) {
       return res.status(400).json({ ok: false, error: 'Invalid application id' });
     }
-    if (!Number.isInteger(score) || score < 1 || score > 10 || !notes) {
-      return res.status(400).json({ ok: false, error: 'score (1-10) and notes are required' });
+    if (!Number.isInteger(score) || score < 1 || score > 10 || notes.error) {
+      return res.status(400).json({ ok: false, error: notes.error || 'score must be an integer from 1 to 10' });
     }
 
     const application = db.prepare('SELECT id, status FROM applications WHERE id = ?').get(applicationId);
@@ -412,7 +437,7 @@ module.exports = function createGrantFoundation(config = {}) {
     `);
 
     const transaction = db.transaction(() => {
-      const result = insertReview.run(applicationId, req.user.id, score, notes.trim(), now);
+      const result = insertReview.run(applicationId, req.user.id, score, notes.value, now);
       updateStatus.run(now, applicationId);
       audit(req.user.id, 'application.reviewed', 'application', applicationId, { reviewId: result.lastInsertRowid, score });
       return result.lastInsertRowid;
@@ -426,7 +451,7 @@ module.exports = function createGrantFoundation(config = {}) {
         applicationId,
         reviewerUserId: req.user.id,
         score,
-        notes: notes.trim(),
+        notes: notes.value,
         createdAt: now
       }
     });
@@ -435,7 +460,7 @@ module.exports = function createGrantFoundation(config = {}) {
   router.post('/applications/:applicationId/decision', requireRole(['program_officer', 'admin']), (req, res) => {
     const applicationId = Number(req.params.applicationId);
     const decision = req.body?.decision;
-    const notes = req.body?.notes || '';
+    const notes = typeof req.body?.notes === 'string' ? req.body.notes.trim().slice(0, MAX_TEXT_LENGTH) : '';
 
     if (!Number.isInteger(applicationId) || applicationId < 1) {
       return res.status(400).json({ ok: false, error: 'Invalid application id' });

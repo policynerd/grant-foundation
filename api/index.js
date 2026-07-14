@@ -2,21 +2,36 @@ const express = require('express');
 const path = require('node:path');
 const grantFoundation = require('..');
 
-const app = express();
-const root = '/grants';
-const databasePath = process.env.GRANT_DB_PATH || path.join(process.cwd(), 'grant-foundation.db');
+function defaultDatabasePath() {
+  if (process.env.GRANT_DB_PATH) {
+    return process.env.GRANT_DB_PATH;
+  }
+  if (process.env.VERCEL) {
+    return path.join('/tmp', 'grant-foundation.db');
+  }
+  return path.join(process.cwd(), 'grant-foundation.db');
+}
 
-app.use(root, grantFoundation({ root, dbPath: databasePath }));
+function createApp() {
+  const app = express();
+  const root = '/grants';
 
-app.get('/', (_req, res) => {
-  res.json({
-    ok: true,
-    service: 'grant-foundation',
-    routes: {
-      grants: root
-    }
+  app.use(root, grantFoundation({ root, dbPath: defaultDatabasePath() }));
+
+  app.get('/', (_req, res) => {
+    res.json({
+      ok: true,
+      service: 'grant-foundation',
+      routes: {
+        grants: root
+      }
+    });
   });
-});
+
+  return app;
+}
+
+const app = createApp();
 
 if (require.main === module) {
   const port = Number(process.env.PORT || 3000);
@@ -24,3 +39,5 @@ if (require.main === module) {
 }
 
 module.exports = app;
+module.exports.createApp = createApp;
+module.exports.defaultDatabasePath = defaultDatabasePath;
