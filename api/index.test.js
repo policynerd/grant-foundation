@@ -9,15 +9,9 @@ test('api entrypoint exposes service and grant routes', async () => {
   const { port } = server.address();
 
   try {
-    const rootResponse = await fetch(`http://127.0.0.1:${port}/`);
-    assert.equal(rootResponse.status, 200);
-    assert.deepEqual(await rootResponse.json(), {
-      ok: true,
-      service: 'grant-foundation',
-      routes: {
-        grants: '/grants'
-      }
-    });
+    const rootResponse = await fetch(`http://127.0.0.1:${port}/`, { redirect: 'manual' });
+    assert.equal(rootResponse.status, 302);
+    assert.equal(rootResponse.headers.get('location'), '/grants/ui');
 
     const healthResponse = await fetch(`http://127.0.0.1:${port}/grants/health`);
     assert.equal(healthResponse.status, 200);

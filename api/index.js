@@ -20,13 +20,7 @@ function createApp() {
   app.use(root, grantFoundation({ root, dbPath: defaultDatabasePath() }));
 
   app.get('/', (_req, res) => {
-    res.json({
-      ok: true,
-      service: 'grant-foundation',
-      routes: {
-        grants: root
-      }
-    });
+    res.redirect(302, `${root}/ui`);
   });
 
   return app;
